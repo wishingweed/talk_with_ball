@@ -5,8 +5,48 @@ import math
 from ultralytics import YOLO
 from collections import defaultdict
 import moviepy.editor as mp
+from collections import deque
+
+# 定义一个最大长度为5的队列
+side_queue = deque(maxlen=5)
+
+
 
 distance_thresh = 500
+
+
+class Point:
+    def __init__(self, xy):
+        self.x = xy[0]
+        self.y = xy[1]
+
+
+def line_intersection(line1, line2):
+    """
+    :param line1: 线段一开头结尾坐标[[x1,y1], [x2,y2]]
+    :param line2: 线段二开头结尾坐标[[x3,y3], [x4,y4]]
+    :return: False/[x,y]
+    """
+    a, b, c, d = Point(line1[0]), Point(line1[1]), Point(line2[0]), Point(line1[1])
+    # 三角形abc 面积的2倍
+    area_abc = (a.x - c.x) * (b.y - c.y) - (a.y - c.y) * (b.x - c.x)
+    # 三角形abd 面积的2倍
+    area_abd = (a.x - d.x) * (b.y - d.y) - (a.y - d.y) * (b.x - d.x)
+    # 面积符号相同则两点在线段同侧, 不相交(对点在线段上的情况, 本例当作不相交处理);
+    if area_abc * area_abd >= 0:
+        return False
+    # 三角形cda面积的2倍
+    area_cda = (c.x - a.x) * (d.y - a.y) - (c.y - a.y) * (d.x - a.x)
+    # 三角形cdb面积的2倍
+    # 注意: 这里有一个小优化.不需要再用公式计算面积, 而是通过已知的三个面积加减得出.
+    area_cdb = area_cda + area_abc - area_abd
+    if area_cda * area_cdb >= 0:
+        return False
+    # 计算交点坐标
+    t = area_cda / (area_abd - area_abc)
+    dx = t * (b.x - a.x)
+    dy = t * (b.y - a.y)
+    return [a.x + dx, a.y + dy]
 
 
 def origin_predict():
@@ -58,6 +98,7 @@ def yolo_video_finetune_predict(model_path, video_path):
     result_frames = []
     int_name_dict = {0: 'backboard', 1: 'ball', 2: 'basket'}
     ball_positions = []
+    basket_positions = []
 
     while cap.isOpened():
         # Read a frame from the video
@@ -72,6 +113,12 @@ def yolo_video_finetune_predict(model_path, video_path):
             annotated_frame = results[0].plot()
             # int_name_dict = {0: 'backboard', 1: 'ball', 2: 'basket'}
             ball_results = []
+            basket_results = []
+
+            basket_x1 = 0
+            basket_y1 = 0
+            basket_x2 = 0
+            basket_y2 = 0
 
             for i in range(len(results[0].boxes)):
                 box = results[0].boxes[i]
@@ -89,12 +136,25 @@ def yolo_video_finetune_predict(model_path, video_path):
 
                 if result_class == 2:
                     x1, y1, x2, y2 = [int(i) for i in results[0].boxes.xyxy[i]]
+                    center_x = int((x1+x2)/2)
+                    basket_results.append((center_x, y1, x1, y1, x2, y2))
 
                 if result_class == 1:
                     x1, y1, x2, y2 = [int(i) for i in results[0].boxes.xyxy[i]]
                     center_x = int((x1+x2)/2)
                     center_y = int((y1+y2)/2)
                     ball_results.append((center_x, center_y))
+
+
+            cur_basket_position = (0, 0)
+            for basket_result in basket_results:
+                cur_distance_x = abs(basket_result[0] -video_center)
+                if cur_distance_x < 200:
+                    cur_basket_position = basket_result
+                if basket_result[0] -video_center > 0:
+                    side_queue.append('right')
+                else:
+                    side_queue.append('left')
 
             min_distance = 1000
             cur_ball_x = 0
@@ -107,6 +167,19 @@ def yolo_video_finetune_predict(model_path, video_path):
                     min_distance = cur_distance
             if min_distance < distance_thresh:
                 ball_positions.append((cur_ball_x, cur_ball_y))
+            if len(ball_positions) > 2 and cur_basket_position != (0, 0):
+                joint_pos = line_intersection([[
+                    , cur_ball_y], [ball_positions[-2][0], ball_positions[-2][1]]], [[cur_basket_position[2], cur_basket_position[3]],[cur_basket_position[4], cur_basket_position[5]]])
+                print(joint_pos)
+                print([[cur_ball_x, cur_ball_y], [ball_positions[-2][0], ball_positions[-2][1]]])
+                print([[cur_basket_position[2], cur_basket_position[3]],[cur_basket_position[4], cur_basket_position[5]]])
+                if joint_pos:
+                    print('进了么')
+
+
+            # all_left = all(item == 'left' for item in queue)
+
+
 
 
 
